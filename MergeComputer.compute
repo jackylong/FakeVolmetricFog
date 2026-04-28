@@ -1,0 +1,21 @@
+#pragma kernel CSMain
+
+RWTexture2D<float> Result;   // 主 RT（旧）
+Texture2D<float> NewTex;     // 新 RT
+
+int _Width;
+int _Height;
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Width || id.y >= _Height) return;
+
+    float oldVal = Result[id.xy];
+    float newVal = NewTex[id.xy];
+
+    // ⭐ 黑色合并（关键）
+    float merged = min(oldVal, newVal);
+
+    Result[id.xy] = merged;
+}

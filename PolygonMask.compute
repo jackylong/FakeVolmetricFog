@@ -1,0 +1,105 @@
+#pragma kernel CSMain
+
+RWTexture2D<float4> Result;
+
+StructuredBuffer<float2> _Polygon;
+int _PointCount;
+
+int _Width;
+int _Height;
+
+float _Expand;    // 膨胀（像素，正=变大，负=收缩）
+
+int _Mode;   // 1=简单模式,2=渐变模式
+float _GradientWidth; //控制渐变范围
+float _Progress;      // 0~1 动画进度
+float _StepExpand; // 每帧膨胀增量（像素）
+
+float _TimeValue;
+
+// 点是否在多边形内（射线法）
+bool IsInside(float2 p)
+{
+    bool inside = false;
+
+    for (int i = 0, j = _PointCount - 1; i < _PointCount; j = i++)
+    {
+        float2 pi = _Polygon[i];
+        float2 pj = _Polygon[j];
+
+        if (((pi.y > p.y) != (pj.y > p.y)) &&
+            (p.x < (pj.x - pi.x) * (p.y - pi.y) / (pj.y - pi.y + 1e-6) + pi.x))
+        {
+            inside = !inside;
+        }
+    }
+
+    return inside;
+}
+// =======================
+// 点到线段距离
+// =======================
+float DistanceToSegment(float2 p, float2 a, float2 b)
+{
+    float2 ab = b - a;
+    float t = dot(p - a, ab) / max(dot(ab, ab), 1e-6);
+    t = saturate(t);
+
+    float2 closest = a + t * ab;
+    return length(p - closest);
+}
+// =======================
+// 到多边形边的最短距离
+// =======================
+float DistanceToPolygon(float2 p)
+{
+    float minDist = 9999.0;
+
+    for (int i = 0; i < _PointCount - 1; i++)
+    {
+        float d = DistanceToSegment(p, _Polygon[i], _Polygon[i + 1]);
+        minDist = min(minDist, d);
+    }
+
+    return minDist;
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Width || id.y >= _Height) return;
+
+    float2 uv = float2(
+        (id.x + 0.5) / _Width,
+        (id.y + 0.5) / _Height
+    );
+
+    bool inside = IsInside(uv);
+    // ⭐ 距离（像素单位）
+    float dist = DistanceToPolygon(uv) * _Width;
+
+    // ⭐ Signed Distance（关键）
+    float sd = inside ? -dist : dist;
+
+    
+    float alpha;
+    if(_Mode == 2){
+        // ⭐ 膨胀 / 收缩
+        sd -= _Expand;
+        alpha = saturate((sd) / _GradientWidth);        
+    }else{
+        // // ⭐ 羽化（只影响边界，不会双边糊）
+        sd -= _StepExpand; // 通过缩放控制羽化范围
+        // 线性淡出
+        alpha =1.0- saturate((-sd) / _GradientWidth)*_Progress; // 0~1，动画过程中边界逐渐变模糊   
+
+
+        // // 噪声溶解（高级）
+        // float noise = frac(sin(dot(uv * 200.0, float2(12.9898,78.233))) * 43758.5453);        
+        // float threshold = lerp(1.0, 0.0, _Progress);        
+        // alpha = 1.0 - step(threshold, noise) * saturate((-sd) / _GradientWidth);
+    }
+    Result[int2(id.xy)] = float4(alpha, alpha, alpha, 1);
+    
+}
+
